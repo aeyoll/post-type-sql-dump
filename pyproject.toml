@@ -1,0 +1,15 @@
+[bumpver]
+current_version = "1.0.0"
+version_pattern = "MAJOR.MINOR.PATCH"
+
+[bumpver.file_patterns]
+"post-type-sql-dump.php" = [
+  "Version: {version}$",
+  "define('PTSD_VERSION', '{version}');$",
+]
+"README.md" = [
+  "**Stable tag:** {version}$",
+]
+"readme.txt" = [
+  "Stable tag: {version}$",
+]
