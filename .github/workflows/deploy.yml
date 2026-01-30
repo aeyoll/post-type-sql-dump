@@ -1,0 +1,121 @@
+name: Deploy WordPress Plugin
+
+on:
+  push:
+    tags:
+      - '*'
+
+jobs:
+  build-and-deploy:
+    name: Build and Deploy Plugin
+    runs-on: ubuntu-latest
+    if: "contains(github.event.head_commit.message, 'chore(version):')"
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install SVN
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y subversion
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          tools: composer, wp-cli
+
+      - name: Get version from tag
+        id: get_version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Build plugin archive
+        run: |
+          # Create clean build directory
+          mkdir -p build/post-type-sql-dump release
+
+          # Copy files respecting .distignore
+          rsync -av --exclude-from=.distignore . build/post-type-sql-dump/
+
+          # Create ZIP
+          cd build && zip -r ../release/post-type-sql-dump.zip post-type-sql-dump/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: release/post-type-sql-dump.zip
+          body: |
+            Release version ${{ steps.get_version.outputs.version }}
+
+            This release includes the latest features and bug fixes for the Pow Captcha WordPress plugin.
+          name: ${{ steps.get_version.outputs.version }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Checkout WordPress SVN repository
+        env:
+          SVN_USERNAME: ${{ secrets.SVN_USERNAME }}
+          SVN_PASSWORD: ${{ secrets.SVN_PASSWORD }}
+        run: |
+          svn checkout "https://plugins.svn.wordpress.org/post-type-sql-dump" \
+          --username "$SVN_USERNAME" \
+          --password "$SVN_PASSWORD" \
+          --no-auth-cache \
+          --non-interactive \
+          --trust-server-cert \
+          svn
+
+      - name: Prepare SVN
+        working-directory: svn
+        run: |
+          VERSION=${{ steps.get_version.outputs.version }}
+
+          # Clean existing directories
+          rm -rf trunk/* tags/$VERSION
+          rm -rf assets/*
+
+          # Extract the ZIP archive created in previous step
+          unzip -q ../release/post-type-sql-dump.zip -d temp
+
+          # Copy all files to trunk
+          cp -r temp/post-type-sql-dump/* trunk/
+
+          svn add trunk/* --force
+
+          # Create tag
+          mkdir -p tags/$VERSION
+          cp -r trunk/* tags/$VERSION/
+          svn add tags/$VERSION --force
+
+          # Clean up temp directory
+          rm -rf temp
+
+          # Remove deleted files
+          svn status | grep '^\!' | sed 's/! *//' | xargs -I% svn rm %@
+
+      - name: Commit to SVN
+        working-directory: svn
+        env:
+          SVN_USERNAME: ${{ secrets.SVN_USERNAME }}
+          SVN_PASSWORD: ${{ secrets.SVN_PASSWORD }}
+        run: |
+          VERSION=${{ steps.get_version.outputs.version }}
+          svn commit -m "Release version $VERSION" \
+            --username "$SVN_USERNAME" \
+            --password "$SVN_PASSWORD" \
+            --no-auth-cache \
+            --non-interactive \
+            --trust-server-cert
+
+      - name: Notify on success
+        if: success()
+        run: |
+          echo "Plugin successfully deployed to WordPress.org and GitHub!"
+          echo "Version ${{ steps.get_version.outputs.version }} is now live!"
