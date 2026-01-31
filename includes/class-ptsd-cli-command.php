@@ -59,6 +59,18 @@ class PTSD_CLI_Command {
     private $term_translation_groups = [];
 
     /**
+     * Prepare IN clause for SQL query
+     *
+     * @param array $values Array of values to include in IN clause
+     * @return string Prepared IN clause with placeholders
+     */
+    private function prepare_in_clause($values) {
+        $placeholders = implode(', ', array_fill(0, count($values), '%s'));
+
+        return $placeholders;
+    }
+
+    /**
      * Dump content for a specific post type
      *
      * ## OPTIONS
@@ -131,7 +143,7 @@ class PTSD_CLI_Command {
 
         $this->sql_dump[] = "-- WordPress Posts Export with New IDs (Polylang Compatible)";
         $this->sql_dump[] = "-- Post Type: {$this->post_type}";
-        $this->sql_dump[] = "-- Generated: " . date('Y-m-d H:i:s');
+        $this->sql_dump[] = "-- Generated: " . gmdate('Y-m-d H:i:s');
         $this->sql_dump[] = "-- Database: {$database}";
         $this->sql_dump[] = "--";
         $this->sql_dump[] = "";
@@ -219,15 +231,16 @@ class PTSD_CLI_Command {
         $this->sql_dump[] = "--";
         $this->sql_dump[] = "";
 
-        $language_mapping_query = "
-            SELECT DISTINCT t.slug
-            FROM {$this->table_prefix}term_taxonomy tt
-            INNER JOIN {$this->table_prefix}terms t ON tt.term_id = t.term_id
-            WHERE tt.taxonomy = 'language'
-            ORDER BY t.slug
-        ";
-
-        $language_slugs = $this->wpdb->get_col($language_mapping_query);
+        $language_slugs = $this->wpdb->get_col(
+            $this->wpdb->prepare(
+                "SELECT DISTINCT t.slug
+                FROM {$this->wpdb->prefix}term_taxonomy tt
+                INNER JOIN {$this->wpdb->prefix}terms t ON tt.term_id = t.term_id
+                WHERE tt.taxonomy = %s
+                ORDER BY t.slug",
+                'language'
+            )
+        );
 
         if (!empty($language_slugs)) {
             $this->sql_dump[] = "-- Dynamically map language slugs to target database term_taxonomy_ids";
@@ -275,17 +288,20 @@ class PTSD_CLI_Command {
         $this->sql_dump[] = "--";
         $this->sql_dump[] = "";
 
-        $posts_query = $this->wpdb->prepare("
-            SELECT p.*, t.slug as post_language
-            FROM {$this->table_prefix}posts p
-            LEFT JOIN {$this->table_prefix}term_relationships tr ON p.ID = tr.object_id
-            LEFT JOIN {$this->table_prefix}term_taxonomy tt ON tr.term_taxonomy_id = tt.term_taxonomy_id AND tt.taxonomy = 'language'
-            LEFT JOIN {$this->table_prefix}terms t ON tt.term_id = t.term_id
-            WHERE p.post_type = %s
-            ORDER BY p.ID ASC
-        ", $this->post_type);
-
-        $posts = $this->wpdb->get_results($posts_query, ARRAY_A);
+        $posts = $this->wpdb->get_results(
+            $this->wpdb->prepare(
+                "SELECT p.*, t.slug as post_language
+                FROM {$this->wpdb->prefix}posts p
+                LEFT JOIN {$this->wpdb->prefix}term_relationships tr ON p.ID = tr.object_id
+                LEFT JOIN {$this->wpdb->prefix}term_taxonomy tt ON tr.term_taxonomy_id = tt.term_taxonomy_id AND tt.taxonomy = %s
+                LEFT JOIN {$this->wpdb->prefix}terms t ON tt.term_id = t.term_id
+                WHERE p.post_type = %s
+                ORDER BY p.ID ASC",
+                'language',
+                $this->post_type
+            ),
+            ARRAY_A
+        );
 
         if ($posts) {
             foreach ($posts as $post) {
@@ -336,18 +352,22 @@ class PTSD_CLI_Command {
         $this->sql_dump[] = "--";
         $this->sql_dump[] = "";
 
-        $attachments_query = $this->wpdb->prepare("
-            SELECT DISTINCT a.*
-            FROM {$this->table_prefix}posts a
-            INNER JOIN {$this->table_prefix}postmeta pm ON a.ID = pm.meta_value
-            INNER JOIN {$this->table_prefix}posts p ON pm.post_id = p.ID
-            WHERE p.post_type = %s
-            AND pm.meta_key = '_thumbnail_id'
-            AND a.post_type = 'attachment'
-            ORDER BY a.ID ASC
-        ", $this->post_type);
-
-        $attachments = $this->wpdb->get_results($attachments_query, ARRAY_A);
+        $attachments = $this->wpdb->get_results(
+            $this->wpdb->prepare(
+                "SELECT DISTINCT a.*
+                FROM {$this->wpdb->prefix}posts a
+                INNER JOIN {$this->wpdb->prefix}postmeta pm ON a.ID = pm.meta_value
+                INNER JOIN {$this->wpdb->prefix}posts p ON pm.post_id = p.ID
+                WHERE p.post_type = %s
+                AND pm.meta_key = %s
+                AND a.post_type = %s
+                ORDER BY a.ID ASC",
+                $this->post_type,
+                '_thumbnail_id',
+                'attachment'
+            ),
+            ARRAY_A
+        );
 
         if ($attachments) {
             foreach ($attachments as $attachment) {
@@ -392,19 +412,23 @@ class PTSD_CLI_Command {
         $this->sql_dump[] = "--";
         $this->sql_dump[] = "";
 
-        $attachment_meta_query = $this->wpdb->prepare("
-            SELECT pm.*, a.ID as old_attachment_id
-            FROM {$this->table_prefix}postmeta pm
-            INNER JOIN {$this->table_prefix}posts a ON pm.post_id = a.ID
-            INNER JOIN {$this->table_prefix}postmeta pm2 ON a.ID = pm2.meta_value
-            INNER JOIN {$this->table_prefix}posts p ON pm2.post_id = p.ID
-            WHERE p.post_type = %s
-            AND pm2.meta_key = '_thumbnail_id'
-            AND a.post_type = 'attachment'
-            ORDER BY pm.meta_id ASC
-        ", $this->post_type);
-
-        $attachment_meta = $this->wpdb->get_results($attachment_meta_query, ARRAY_A);
+        $attachment_meta = $this->wpdb->get_results(
+            $this->wpdb->prepare(
+                "SELECT pm.*, a.ID as old_attachment_id
+                FROM {$this->wpdb->prefix}postmeta pm
+                INNER JOIN {$this->wpdb->prefix}posts a ON pm.post_id = a.ID
+                INNER JOIN {$this->wpdb->prefix}postmeta pm2 ON a.ID = pm2.meta_value
+                INNER JOIN {$this->wpdb->prefix}posts p ON pm2.post_id = p.ID
+                WHERE p.post_type = %s
+                AND pm2.meta_key = %s
+                AND a.post_type = %s
+                ORDER BY pm.meta_id ASC",
+                $this->post_type,
+                '_thumbnail_id',
+                'attachment'
+            ),
+            ARRAY_A
+        );
 
         if ($attachment_meta) {
             foreach ($attachment_meta as $meta) {
@@ -427,15 +451,17 @@ class PTSD_CLI_Command {
         $this->sql_dump[] = "--";
         $this->sql_dump[] = "";
 
-        $postmeta_query = $this->wpdb->prepare("
-            SELECT pm.*, p.ID as old_post_id
-            FROM {$this->table_prefix}postmeta pm
-            INNER JOIN {$this->table_prefix}posts p ON pm.post_id = p.ID
-            WHERE p.post_type = %s
-            ORDER BY pm.meta_id ASC
-        ", $this->post_type);
-
-        $postmeta = $this->wpdb->get_results($postmeta_query, ARRAY_A);
+        $postmeta = $this->wpdb->get_results(
+            $this->wpdb->prepare(
+                "SELECT pm.*, p.ID as old_post_id
+                FROM {$this->wpdb->prefix}postmeta pm
+                INNER JOIN {$this->wpdb->prefix}posts p ON pm.post_id = p.ID
+                WHERE p.post_type = %s
+                ORDER BY pm.meta_id ASC",
+                $this->post_type
+            ),
+            ARRAY_A
+        );
 
         if ($postmeta) {
             foreach ($postmeta as $meta) {
@@ -468,17 +494,20 @@ class PTSD_CLI_Command {
         $this->sql_dump[] = "--";
         $this->sql_dump[] = "";
 
-        $translation_terms_query = $this->wpdb->prepare("
-            SELECT DISTINCT t.*
-            FROM {$this->table_prefix}terms t
-            INNER JOIN {$this->table_prefix}term_taxonomy tt ON t.term_id = tt.term_id
-            INNER JOIN {$this->table_prefix}term_relationships tr ON tt.term_taxonomy_id = tr.term_taxonomy_id
-            INNER JOIN {$this->table_prefix}posts p ON tr.object_id = p.ID
-            WHERE tt.taxonomy = 'post_translations'
-            AND p.post_type = %s
-        ", $this->post_type);
-
-        $translation_terms = $this->wpdb->get_results($translation_terms_query, ARRAY_A);
+        $translation_terms = $this->wpdb->get_results(
+            $this->wpdb->prepare(
+                "SELECT DISTINCT t.*
+                FROM {$this->wpdb->prefix}terms t
+                INNER JOIN {$this->wpdb->prefix}term_taxonomy tt ON t.term_id = tt.term_id
+                INNER JOIN {$this->wpdb->prefix}term_relationships tr ON tt.term_taxonomy_id = tr.term_taxonomy_id
+                INNER JOIN {$this->wpdb->prefix}posts p ON tr.object_id = p.ID
+                WHERE tt.taxonomy = %s
+                AND p.post_type = %s",
+                'post_translations',
+                $this->post_type
+            ),
+            ARRAY_A
+        );
 
         if ($translation_terms) {
             foreach ($translation_terms as $term) {
@@ -522,16 +551,19 @@ class PTSD_CLI_Command {
         $this->sql_dump[] = "--";
         $this->sql_dump[] = "";
 
-        $translation_taxonomy_query = $this->wpdb->prepare("
-            SELECT DISTINCT tt.*
-            FROM {$this->table_prefix}term_taxonomy tt
-            INNER JOIN {$this->table_prefix}term_relationships tr ON tt.term_taxonomy_id = tr.term_taxonomy_id
-            INNER JOIN {$this->table_prefix}posts p ON tr.object_id = p.ID
-            WHERE tt.taxonomy = 'post_translations'
-            AND p.post_type = %s
-        ", $this->post_type);
-
-        $translation_taxonomy = $this->wpdb->get_results($translation_taxonomy_query, ARRAY_A);
+        $translation_taxonomy = $this->wpdb->get_results(
+            $this->wpdb->prepare(
+                "SELECT DISTINCT tt.*
+                FROM {$this->wpdb->prefix}term_taxonomy tt
+                INNER JOIN {$this->wpdb->prefix}term_relationships tr ON tt.term_taxonomy_id = tr.term_taxonomy_id
+                INNER JOIN {$this->wpdb->prefix}posts p ON tr.object_id = p.ID
+                WHERE tt.taxonomy = %s
+                AND p.post_type = %s",
+                'post_translations',
+                $this->post_type
+            ),
+            ARRAY_A
+        );
 
         if ($translation_taxonomy) {
             foreach ($translation_taxonomy as $tt) {
@@ -584,36 +616,41 @@ class PTSD_CLI_Command {
         $this->sql_dump[] = "--";
         $this->sql_dump[] = "";
 
-        // Get all taxonomies used by this post type
-        $taxonomies_query = $this->wpdb->prepare("
-            SELECT DISTINCT tt.taxonomy
-            FROM {$this->table_prefix}term_taxonomy tt
-            INNER JOIN {$this->table_prefix}term_relationships tr ON tt.term_taxonomy_id = tr.term_taxonomy_id
-            INNER JOIN {$this->table_prefix}posts p ON tr.object_id = p.ID
-            WHERE p.post_type = %s
-            AND tt.taxonomy NOT IN ('language', 'post_translations', 'term_language', 'term_translations')
-        ", $this->post_type);
-
-        $taxonomies = $this->wpdb->get_col($taxonomies_query);
+        $taxonomies = $this->wpdb->get_col(
+            $this->wpdb->prepare(
+                "SELECT DISTINCT tt.taxonomy
+                FROM {$this->wpdb->prefix}term_taxonomy tt
+                INNER JOIN {$this->wpdb->prefix}term_relationships tr ON tt.term_taxonomy_id = tr.term_taxonomy_id
+                INNER JOIN {$this->wpdb->prefix}posts p ON tr.object_id = p.ID
+                WHERE p.post_type = %s
+                AND tt.taxonomy NOT IN (%s, %s, %s, %s)",
+                $this->post_type,
+                'language',
+                'post_translations',
+                'term_language',
+                'term_translations'
+            )
+        );
 
         if (!empty($taxonomies)) {
             WP_CLI::log("Found taxonomies: " . implode(', ', $taxonomies));
 
-            $taxonomies_escaped = array_map('esc_sql', $taxonomies);
-            $taxonomies_list = "'" . implode("', '", $taxonomies_escaped) . "'";
+            $placeholders = $this->prepare_in_clause($taxonomies);
+            $query = "SELECT DISTINCT t.*, lang_t.slug as term_language
+                FROM {$this->wpdb->prefix}terms t
+                INNER JOIN {$this->wpdb->prefix}term_taxonomy tt ON t.term_id = tt.term_id
+                LEFT JOIN {$this->wpdb->prefix}term_relationships lang_tr ON t.term_id = lang_tr.object_id
+                LEFT JOIN {$this->wpdb->prefix}term_taxonomy lang_tt ON lang_tr.term_taxonomy_id = lang_tt.term_taxonomy_id AND lang_tt.taxonomy = %s
+                LEFT JOIN {$this->wpdb->prefix}terms lang_t ON lang_tt.term_id = lang_t.term_id
+                WHERE tt.taxonomy IN ({$placeholders})
+                ORDER BY t.term_id ASC";
 
-            $terms_query = "
-                SELECT DISTINCT t.*, lang_t.slug as term_language
-                FROM {$this->table_prefix}terms t
-                INNER JOIN {$this->table_prefix}term_taxonomy tt ON t.term_id = tt.term_id
-                LEFT JOIN {$this->table_prefix}term_relationships lang_tr ON t.term_id = lang_tr.object_id
-                LEFT JOIN {$this->table_prefix}term_taxonomy lang_tt ON lang_tr.term_taxonomy_id = lang_tt.term_taxonomy_id AND lang_tt.taxonomy = 'term_language'
-                LEFT JOIN {$this->table_prefix}terms lang_t ON lang_tt.term_id = lang_t.term_id
-                WHERE tt.taxonomy IN ({$taxonomies_list})
-                ORDER BY t.term_id ASC
-            ";
-
-            $terms = $this->wpdb->get_results($terms_query, ARRAY_A);
+            $prepared_args = array_merge(['term_language'], $taxonomies);
+            // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Dynamic IN clause is properly prepared
+            $terms = $this->wpdb->get_results(
+                $this->wpdb->prepare($query, $prepared_args),
+                ARRAY_A
+            );
 
             if ($terms) {
                 foreach ($terms as $term) {
@@ -663,21 +700,28 @@ class PTSD_CLI_Command {
         $this->sql_dump[] = "--";
         $this->sql_dump[] = "";
 
-        $term_translation_terms_query = $this->wpdb->prepare("
-            SELECT DISTINCT t.*
-            FROM {$this->table_prefix}terms t
-            INNER JOIN {$this->table_prefix}term_taxonomy tt ON t.term_id = tt.term_id
-            INNER JOIN {$this->table_prefix}term_relationships tr ON tt.term_taxonomy_id = tr.term_taxonomy_id
-            INNER JOIN {$this->table_prefix}terms term_obj ON tr.object_id = term_obj.term_id
-            INNER JOIN {$this->table_prefix}term_taxonomy tt2 ON term_obj.term_id = tt2.term_id
-            INNER JOIN {$this->table_prefix}term_relationships tr2 ON tt2.term_taxonomy_id = tr2.term_taxonomy_id
-            INNER JOIN {$this->table_prefix}posts p ON tr2.object_id = p.ID
-            WHERE tt.taxonomy = 'term_translations'
-            AND p.post_type = %s
-            AND tt2.taxonomy NOT IN ('language', 'post_translations', 'term_language', 'term_translations')
-        ", $this->post_type);
-
-        $term_translation_terms = $this->wpdb->get_results($term_translation_terms_query, ARRAY_A);
+        $term_translation_terms = $this->wpdb->get_results(
+            $this->wpdb->prepare(
+                "SELECT DISTINCT t.*
+                FROM {$this->wpdb->prefix}terms t
+                INNER JOIN {$this->wpdb->prefix}term_taxonomy tt ON t.term_id = tt.term_id
+                INNER JOIN {$this->wpdb->prefix}term_relationships tr ON tt.term_taxonomy_id = tr.term_taxonomy_id
+                INNER JOIN {$this->wpdb->prefix}terms term_obj ON tr.object_id = term_obj.term_id
+                INNER JOIN {$this->wpdb->prefix}term_taxonomy tt2 ON term_obj.term_id = tt2.term_id
+                INNER JOIN {$this->wpdb->prefix}term_relationships tr2 ON tt2.term_taxonomy_id = tr2.term_taxonomy_id
+                INNER JOIN {$this->wpdb->prefix}posts p ON tr2.object_id = p.ID
+                WHERE tt.taxonomy = %s
+                AND p.post_type = %s
+                AND tt2.taxonomy NOT IN (%s, %s, %s, %s)",
+                'term_translations',
+                $this->post_type,
+                'language',
+                'post_translations',
+                'term_language',
+                'term_translations'
+            ),
+            ARRAY_A
+        );
 
         if ($term_translation_terms) {
             foreach ($term_translation_terms as $term) {
@@ -721,20 +765,27 @@ class PTSD_CLI_Command {
         $this->sql_dump[] = "--";
         $this->sql_dump[] = "";
 
-        $term_translation_taxonomy_query = $this->wpdb->prepare("
-            SELECT DISTINCT tt.*
-            FROM {$this->table_prefix}term_taxonomy tt
-            INNER JOIN {$this->table_prefix}term_relationships tr ON tt.term_taxonomy_id = tr.term_taxonomy_id
-            INNER JOIN {$this->table_prefix}terms term_obj ON tr.object_id = term_obj.term_id
-            INNER JOIN {$this->table_prefix}term_taxonomy tt2 ON term_obj.term_id = tt2.term_id
-            INNER JOIN {$this->table_prefix}term_relationships tr2 ON tt2.term_taxonomy_id = tr2.term_taxonomy_id
-            INNER JOIN {$this->table_prefix}posts p ON tr2.object_id = p.ID
-            WHERE tt.taxonomy = 'term_translations'
-            AND p.post_type = %s
-            AND tt2.taxonomy NOT IN ('language', 'post_translations', 'term_language', 'term_translations')
-        ", $this->post_type);
-
-        $term_translation_taxonomy = $this->wpdb->get_results($term_translation_taxonomy_query, ARRAY_A);
+        $term_translation_taxonomy = $this->wpdb->get_results(
+            $this->wpdb->prepare(
+                "SELECT DISTINCT tt.*
+                FROM {$this->wpdb->prefix}term_taxonomy tt
+                INNER JOIN {$this->wpdb->prefix}term_relationships tr ON tt.term_taxonomy_id = tr.term_taxonomy_id
+                INNER JOIN {$this->wpdb->prefix}terms term_obj ON tr.object_id = term_obj.term_id
+                INNER JOIN {$this->wpdb->prefix}term_taxonomy tt2 ON term_obj.term_id = tt2.term_id
+                INNER JOIN {$this->wpdb->prefix}term_relationships tr2 ON tt2.term_taxonomy_id = tr2.term_taxonomy_id
+                INNER JOIN {$this->wpdb->prefix}posts p ON tr2.object_id = p.ID
+                WHERE tt.taxonomy = %s
+                AND p.post_type = %s
+                AND tt2.taxonomy NOT IN (%s, %s, %s, %s)",
+                'term_translations',
+                $this->post_type,
+                'language',
+                'post_translations',
+                'term_language',
+                'term_translations'
+            ),
+            ARRAY_A
+        );
 
         if ($term_translation_taxonomy) {
             foreach ($term_translation_taxonomy as $tt) {
@@ -787,30 +838,34 @@ class PTSD_CLI_Command {
         $this->sql_dump[] = "--";
         $this->sql_dump[] = "";
 
-        // Get taxonomies list
-        $taxonomies_query = $this->wpdb->prepare("
-            SELECT DISTINCT tt.taxonomy
-            FROM {$this->table_prefix}term_taxonomy tt
-            INNER JOIN {$this->table_prefix}term_relationships tr ON tt.term_taxonomy_id = tr.term_taxonomy_id
-            INNER JOIN {$this->table_prefix}posts p ON tr.object_id = p.ID
-            WHERE p.post_type = %s
-            AND tt.taxonomy NOT IN ('language', 'post_translations', 'term_language', 'term_translations')
-        ", $this->post_type);
-
-        $taxonomies = $this->wpdb->get_col($taxonomies_query);
+        $taxonomies = $this->wpdb->get_col(
+            $this->wpdb->prepare(
+                "SELECT DISTINCT tt.taxonomy
+                FROM {$this->wpdb->prefix}term_taxonomy tt
+                INNER JOIN {$this->wpdb->prefix}term_relationships tr ON tt.term_taxonomy_id = tr.term_taxonomy_id
+                INNER JOIN {$this->wpdb->prefix}posts p ON tr.object_id = p.ID
+                WHERE p.post_type = %s
+                AND tt.taxonomy NOT IN (%s, %s, %s, %s)",
+                $this->post_type,
+                'language',
+                'post_translations',
+                'term_language',
+                'term_translations'
+            )
+        );
 
         if (!empty($taxonomies)) {
-            $taxonomies_escaped = array_map('esc_sql', $taxonomies);
-            $taxonomies_list = "'" . implode("', '", $taxonomies_escaped) . "'";
+            $placeholders = $this->prepare_in_clause($taxonomies);
+            $query = "SELECT DISTINCT tt.*
+                FROM {$this->wpdb->prefix}term_taxonomy tt
+                WHERE tt.taxonomy IN ({$placeholders})
+                ORDER BY tt.term_taxonomy_id ASC";
 
-            $term_taxonomy_query = "
-                SELECT DISTINCT tt.*
-                FROM {$this->table_prefix}term_taxonomy tt
-                WHERE tt.taxonomy IN ({$taxonomies_list})
-                ORDER BY tt.term_taxonomy_id ASC
-            ";
-
-            $term_taxonomy = $this->wpdb->get_results($term_taxonomy_query, ARRAY_A);
+            // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Dynamic IN clause is properly prepared
+            $term_taxonomy = $this->wpdb->get_results(
+                $this->wpdb->prepare($query, $taxonomies),
+                ARRAY_A
+            );
 
             if ($term_taxonomy) {
                 WP_CLI::log("Exporting " . count($term_taxonomy) . " term_taxonomy entries");
@@ -861,32 +916,36 @@ class PTSD_CLI_Command {
         $this->sql_dump[] = "--";
         $this->sql_dump[] = "";
 
-        // Get taxonomies list
-        $taxonomies_query = $this->wpdb->prepare("
-            SELECT DISTINCT tt.taxonomy
-            FROM {$this->table_prefix}term_taxonomy tt
-            INNER JOIN {$this->table_prefix}term_relationships tr ON tt.term_taxonomy_id = tr.term_taxonomy_id
-            INNER JOIN {$this->table_prefix}posts p ON tr.object_id = p.ID
-            WHERE p.post_type = %s
-            AND tt.taxonomy NOT IN ('language', 'post_translations', 'term_language', 'term_translations')
-        ", $this->post_type);
-
-        $taxonomies = $this->wpdb->get_col($taxonomies_query);
+        $taxonomies = $this->wpdb->get_col(
+            $this->wpdb->prepare(
+                "SELECT DISTINCT tt.taxonomy
+                FROM {$this->wpdb->prefix}term_taxonomy tt
+                INNER JOIN {$this->wpdb->prefix}term_relationships tr ON tt.term_taxonomy_id = tr.term_taxonomy_id
+                INNER JOIN {$this->wpdb->prefix}posts p ON tr.object_id = p.ID
+                WHERE p.post_type = %s
+                AND tt.taxonomy NOT IN (%s, %s, %s, %s)",
+                $this->post_type,
+                'language',
+                'post_translations',
+                'term_language',
+                'term_translations'
+            )
+        );
 
         if (!empty($taxonomies)) {
-            $taxonomies_escaped = array_map('esc_sql', $taxonomies);
-            $taxonomies_list = "'" . implode("', '", $taxonomies_escaped) . "'";
+            $placeholders = $this->prepare_in_clause($taxonomies);
+            $query = "SELECT tm.*, t.term_id as old_term_id
+                FROM {$this->wpdb->prefix}termmeta tm
+                INNER JOIN {$this->wpdb->prefix}terms t ON tm.term_id = t.term_id
+                INNER JOIN {$this->wpdb->prefix}term_taxonomy tt ON t.term_id = tt.term_id
+                WHERE tt.taxonomy IN ({$placeholders})
+                ORDER BY tm.meta_id ASC";
 
-            $termmeta_query = "
-                SELECT tm.*, t.term_id as old_term_id
-                FROM {$this->table_prefix}termmeta tm
-                INNER JOIN {$this->table_prefix}terms t ON tm.term_id = t.term_id
-                INNER JOIN {$this->table_prefix}term_taxonomy tt ON t.term_id = tt.term_id
-                WHERE tt.taxonomy IN ({$taxonomies_list})
-                ORDER BY tm.meta_id ASC
-            ";
-
-            $termmeta = $this->wpdb->get_results($termmeta_query, ARRAY_A);
+            // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Dynamic IN clause is properly prepared
+            $termmeta = $this->wpdb->get_results(
+                $this->wpdb->prepare($query, $taxonomies),
+                ARRAY_A
+            );
 
             if ($termmeta) {
                 foreach ($termmeta as $meta) {
@@ -910,41 +969,47 @@ class PTSD_CLI_Command {
         $this->sql_dump[] = "--";
         $this->sql_dump[] = "";
 
-        // Get taxonomies list
-        $taxonomies_query = $this->wpdb->prepare("
-            SELECT DISTINCT tt.taxonomy
-            FROM {$this->table_prefix}term_taxonomy tt
-            INNER JOIN {$this->table_prefix}term_relationships tr ON tt.term_taxonomy_id = tr.term_taxonomy_id
-            INNER JOIN {$this->table_prefix}posts p ON tr.object_id = p.ID
-            WHERE p.post_type = %s
-            AND tt.taxonomy NOT IN ('language', 'post_translations', 'term_language', 'term_translations')
-        ", $this->post_type);
-
-        $taxonomies = $this->wpdb->get_col($taxonomies_query);
+        $taxonomies = $this->wpdb->get_col(
+            $this->wpdb->prepare(
+                "SELECT DISTINCT tt.taxonomy
+                FROM {$this->wpdb->prefix}term_taxonomy tt
+                INNER JOIN {$this->wpdb->prefix}term_relationships tr ON tt.term_taxonomy_id = tr.term_taxonomy_id
+                INNER JOIN {$this->wpdb->prefix}posts p ON tr.object_id = p.ID
+                WHERE p.post_type = %s
+                AND tt.taxonomy NOT IN (%s, %s, %s, %s)",
+                $this->post_type,
+                'language',
+                'post_translations',
+                'term_language',
+                'term_translations'
+            )
+        );
 
         if (!empty($taxonomies)) {
-            $taxonomies_escaped = array_map('esc_sql', $taxonomies);
-            $taxonomies_list = "'" . implode("', '", $taxonomies_escaped) . "'";
-
-            $term_languages_query = "
-                SELECT DISTINCT
+            $placeholders = $this->prepare_in_clause($taxonomies);
+            $query = "SELECT DISTINCT
                     trans_tr.object_id as old_term_id,
                     trans_tt.description
-                FROM {$this->table_prefix}term_taxonomy trans_tt
-                INNER JOIN {$this->table_prefix}term_relationships trans_tr ON trans_tt.term_taxonomy_id = trans_tr.term_taxonomy_id
-                INNER JOIN {$this->table_prefix}terms t ON trans_tr.object_id = t.term_id
-                WHERE trans_tt.taxonomy = 'term_translations'
+                FROM {$this->wpdb->prefix}term_taxonomy trans_tt
+                INNER JOIN {$this->wpdb->prefix}term_relationships trans_tr ON trans_tt.term_taxonomy_id = trans_tr.term_taxonomy_id
+                INNER JOIN {$this->wpdb->prefix}terms t ON trans_tr.object_id = t.term_id
+                WHERE trans_tt.taxonomy = %s
                 AND trans_tt.description != ''
                 AND EXISTS (
-                    SELECT 1 FROM {$this->table_prefix}term_taxonomy tt
+                    SELECT 1 FROM {$this->wpdb->prefix}term_taxonomy tt
                     WHERE tt.term_id = t.term_id
-                    AND tt.taxonomy IN ({$taxonomies_list})
-                )
-            ";
+                    AND tt.taxonomy IN ({$placeholders})
+                )";
 
-            WP_CLI::log("Term language query: " . $term_languages_query);
+            $prepared_args = array_merge(['term_translations'], $taxonomies);
 
-            $term_languages = $this->wpdb->get_results($term_languages_query, ARRAY_A);
+            WP_CLI::log("Term language query: " . $query);
+
+            // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Dynamic IN clause is properly prepared
+            $term_languages = $this->wpdb->get_results(
+                $this->wpdb->prepare($query, $prepared_args),
+                ARRAY_A
+            );
 
             $term_language_map = [];
 
@@ -997,17 +1062,20 @@ class PTSD_CLI_Command {
         $this->sql_dump[] = "--";
         $this->sql_dump[] = "";
 
-        $post_languages_query = $this->wpdb->prepare("
-            SELECT DISTINCT p.ID as old_post_id, t.slug as language_slug
-            FROM {$this->table_prefix}posts p
-            INNER JOIN {$this->table_prefix}term_relationships tr ON p.ID = tr.object_id
-            INNER JOIN {$this->table_prefix}term_taxonomy tt ON tr.term_taxonomy_id = tt.term_taxonomy_id
-            INNER JOIN {$this->table_prefix}terms t ON tt.term_id = t.term_id
-            WHERE p.post_type = %s
-            AND tt.taxonomy = 'language'
-        ", $this->post_type);
-
-        $post_languages = $this->wpdb->get_results($post_languages_query, ARRAY_A);
+        $post_languages = $this->wpdb->get_results(
+            $this->wpdb->prepare(
+                "SELECT DISTINCT p.ID as old_post_id, t.slug as language_slug
+                FROM {$this->wpdb->prefix}posts p
+                INNER JOIN {$this->wpdb->prefix}term_relationships tr ON p.ID = tr.object_id
+                INNER JOIN {$this->wpdb->prefix}term_taxonomy tt ON tr.term_taxonomy_id = tt.term_taxonomy_id
+                INNER JOIN {$this->wpdb->prefix}terms t ON tt.term_id = t.term_id
+                WHERE p.post_type = %s
+                AND tt.taxonomy = %s",
+                $this->post_type,
+                'language'
+            ),
+            ARRAY_A
+        );
 
         if ($post_languages) {
             foreach ($post_languages as $pl) {
@@ -1030,17 +1098,20 @@ class PTSD_CLI_Command {
         $this->sql_dump[] = "--";
         $this->sql_dump[] = "";
 
-        $term_relationships_query = $this->wpdb->prepare("
-            SELECT tr.object_id, tr.term_taxonomy_id, tt.taxonomy, p.ID as old_post_id
-            FROM {$this->table_prefix}term_relationships tr
-            INNER JOIN {$this->table_prefix}posts p ON tr.object_id = p.ID
-            INNER JOIN {$this->table_prefix}term_taxonomy tt ON tr.term_taxonomy_id = tt.term_taxonomy_id
-            WHERE p.post_type = %s
-            AND tt.taxonomy NOT IN ('language')
-            ORDER BY tt.taxonomy, tr.object_id
-        ", $this->post_type);
-
-        $term_relationships = $this->wpdb->get_results($term_relationships_query, ARRAY_A);
+        $term_relationships = $this->wpdb->get_results(
+            $this->wpdb->prepare(
+                "SELECT tr.object_id, tr.term_taxonomy_id, tt.taxonomy, p.ID as old_post_id
+                FROM {$this->wpdb->prefix}term_relationships tr
+                INNER JOIN {$this->wpdb->prefix}posts p ON tr.object_id = p.ID
+                INNER JOIN {$this->wpdb->prefix}term_taxonomy tt ON tr.term_taxonomy_id = tt.term_taxonomy_id
+                WHERE p.post_type = %s
+                AND tt.taxonomy NOT IN (%s)
+                ORDER BY tt.taxonomy, tr.object_id",
+                $this->post_type,
+                'language'
+            ),
+            ARRAY_A
+        );
 
         if ($term_relationships) {
             foreach ($term_relationships as $tr) {
@@ -1067,20 +1138,27 @@ class PTSD_CLI_Command {
         $this->sql_dump[] = "--";
         $this->sql_dump[] = "";
 
-        $term_trans_relationships_query = $this->wpdb->prepare("
-            SELECT DISTINCT tr.object_id as old_term_id, tr.term_taxonomy_id as old_term_taxonomy_id
-            FROM {$this->table_prefix}term_relationships tr
-            INNER JOIN {$this->table_prefix}term_taxonomy tt ON tr.term_taxonomy_id = tt.term_taxonomy_id
-            INNER JOIN {$this->table_prefix}terms term_obj ON tr.object_id = term_obj.term_id
-            INNER JOIN {$this->table_prefix}term_taxonomy tt2 ON term_obj.term_id = tt2.term_id
-            INNER JOIN {$this->table_prefix}term_relationships tr2 ON tt2.term_taxonomy_id = tr2.term_taxonomy_id
-            INNER JOIN {$this->table_prefix}posts p ON tr2.object_id = p.ID
-            WHERE tt.taxonomy = 'term_translations'
-            AND p.post_type = %s
-            AND tt2.taxonomy NOT IN ('language', 'post_translations', 'term_language', 'term_translations')
-        ", $this->post_type);
-
-        $term_trans_relationships = $this->wpdb->get_results($term_trans_relationships_query, ARRAY_A);
+        $term_trans_relationships = $this->wpdb->get_results(
+            $this->wpdb->prepare(
+                "SELECT DISTINCT tr.object_id as old_term_id, tr.term_taxonomy_id as old_term_taxonomy_id
+                FROM {$this->wpdb->prefix}term_relationships tr
+                INNER JOIN {$this->wpdb->prefix}term_taxonomy tt ON tr.term_taxonomy_id = tt.term_taxonomy_id
+                INNER JOIN {$this->wpdb->prefix}terms term_obj ON tr.object_id = term_obj.term_id
+                INNER JOIN {$this->wpdb->prefix}term_taxonomy tt2 ON term_obj.term_id = tt2.term_id
+                INNER JOIN {$this->wpdb->prefix}term_relationships tr2 ON tt2.term_taxonomy_id = tr2.term_taxonomy_id
+                INNER JOIN {$this->wpdb->prefix}posts p ON tr2.object_id = p.ID
+                WHERE tt.taxonomy = %s
+                AND p.post_type = %s
+                AND tt2.taxonomy NOT IN (%s, %s, %s, %s)",
+                'term_translations',
+                $this->post_type,
+                'language',
+                'post_translations',
+                'term_language',
+                'term_translations'
+            ),
+            ARRAY_A
+        );
 
         if ($term_trans_relationships) {
             foreach ($term_trans_relationships as $ttr) {
@@ -1164,6 +1242,7 @@ class PTSD_CLI_Command {
      */
     private function output_sql_dump() {
         $final_sql_dump = implode("\n", $this->sql_dump);
-        echo $final_sql_dump;
+        // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- This is CLI output of SQL dump
+        fwrite(STDOUT, $final_sql_dump);
     }
 }
