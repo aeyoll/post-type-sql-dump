@@ -5,7 +5,7 @@
  * Description: Export WordPress posts and their associated data (including Polylang translations) to SQL format via WP-CLI command
  * Version: 1.0.0
  * Author: Jean-Philippe Bidegain
- * Author URI: https://wordpress.org/plugins/post-type-sql-dump/
+ * Author URI: https://github.com/aeyoll/post-type-sql-dump
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
  * Text Domain: post-type-sql-dump
