@@ -1,148 +1,79 @@
 === Post Type SQL Dump ===
 
 Contributors: aeyoll
-Tags: post-type-sql-dump, export, import, sql, polylang
-Requires at least: WordPress 5.0
-Tested up to: WordPress 6.9
-Requires PHP: 7.4+
+Tags: export, import, sql, polylang, wp-cli
+Requires at least: 5.0
+Tested up to: 6.9
+Requires PHP: 7.4
 Stable tag: 1.0.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-A WordPress plugin that exports posts and their associated data (including Polylang translations) to SQL format via WP-CLI command.
+Export WordPress posts and their associated data to SQL format via WP-CLI command.
 
 == Description ==
 
-This plugin provides a WP-CLI command to export WordPress posts of any post type along with all their associated data:
+Post Type SQL Dump provides a powerful WP-CLI command to export posts of any type along with all associated data for migration between WordPress installations.
 
-- Posts with new IDs
-- Featured images (attachments)
-- Post metadata (including Polylang translation data)
-- Terms and taxonomies (categories, tags, custom taxonomies)
-- Term metadata
-- Polylang translation groups and language assignments
-- Term relationships
+**What Gets Exported:**
 
-The exported SQL is designed to be imported into another WordPress installation while:
-- Generating new IDs for all entities
-- Preserving relationships between posts, terms, and translations
-- Being compatible with Polylang multilingual plugin
+* Posts with newly generated IDs
+* Featured images and attachments
+* All post metadata and custom fields
+* Categories, tags, and custom taxonomies
+* Term metadata
+* Polylang translations and language assignments
+* All relationships between posts and terms
 
-== Features ==
+**Key Benefits:**
 
-- ✅ Export any post type
-- ✅ Polylang compatible (preserves translations and language assignments)
-- ✅ Exports featured images and their metadata
-- ✅ Handles hierarchical posts (parent-child relationships)
-- ✅ Handles hierarchical terms
-- ✅ Exports all post metadata
-- ✅ Exports all term metadata
-- ✅ Clean deletion queries to remove existing data before import
-- ✅ New IDs generated on import (no ID conflicts)
+* No ID conflicts - generates new IDs on import
+* Preserves all relationships and hierarchies
+* Full Polylang multilingual support
+* Clean imports with automatic cleanup of existing data
 
-== Requirements ==
-
-- WordPress 5.0 or higher
-- PHP 7.4 or higher
-- WP-CLI installed
-- Polylang plugin (optional, for multilingual sites)
+**Requires WP-CLI** - This plugin only works via command line using WP-CLI.
 
 == Installation ==
 
-1. Download the plugin files
-2. Upload the `post-type-sql-dump` directory to `/wp-content/plugins/`
-3. Activate the plugin through the 'Plugins' menu in WordPress
+1. Upload the plugin files to `/wp-content/plugins/post-type-sql-dump/`
+2. Activate the plugin through the 'Plugins' menu in WordPress
+3. Use WP-CLI commands to export data
 
 == Usage ==
 
-== Basic Usage ==
+Basic export command:
 
-Export posts (default post type):
-```bash
-wp ptsd dump --quiet
-```
+`wp ptsd dump --post_type=page --quiet > export.sql`
 
-Export a specific post type:
-```bash
-wp ptsd dump --post_type=page --quiet
-```
+Import on another WordPress installation:
 
-Export custom post type:
-```bash
-wp ptsd dump --post_type=product --quiet
-```
+`wp db import export.sql`
 
-== Save to File ==
+**Available Options:**
 
-To save the output to a SQL file:
-```bash
-wp ptsd dump --post_type=page --quiet > export.sql
-```
+* `--post_type` - Specify which post type to export (default: post)
+* `--quiet` - Suppress progress output
 
-== Import the SQL ==
+== Frequently Asked Questions ==
 
-To import the generated SQL into another WordPress installation:
-```bash
-mysql -u username -p database_name < export.sql
-```
+= Does this work without WP-CLI? =
 
-Or using WP-CLI:
-```bash
-wp db import export.sql
-```
+No, this plugin requires WP-CLI to be installed and only works via command line.
 
-== What Gets Exported ==
+= Will it work with Polylang? =
 
-1. **Posts**: All posts of the specified type with new IDs
-2. **Featured Images**: Attachment posts linked to the exported posts
-3. **Post Metadata**: All custom fields and post meta
-4. **Terms**: Categories, tags, and custom taxonomy terms
-5. **Term Metadata**: All term meta data
-6. **Polylang Data**: Language assignments and translation groups
-7. **Relationships**: All connections between posts and terms
+Yes, the plugin has full support for Polylang multilingual sites and preserves all translation relationships.
 
-== What Gets Deleted Before Import ==
+= What happens to existing data on import? =
 
-The plugin generates deletion queries that clean up existing data before import:
-- Posts of the specified post type
-- Post metadata for those posts
-- Terms in taxonomies used by the post type
-- Term metadata for those terms
-- All relationships (term_relationships)
-- Translation groups (if using Polylang)
+The generated SQL includes deletion queries that remove existing data of the same post type before importing. Always backup your database first.
 
-**⚠️ Warning**: The generated SQL will DELETE existing data of the same post type in the target database before importing. Always backup your database before importing.
+= Can I export custom post types? =
 
-== Support for Polylang ==
-
-The plugin has full support for the Polylang multilingual plugin:
-- Exports language assignments for posts and terms
-- Exports translation groups (relationships between translated posts)
-- Exports term translation groups
-- Dynamically maps to existing languages in target database
-- Preserves all translation relationships
-
-== Troubleshooting ==
-
-### No output generated
-- Make sure WP-CLI is properly installed
-- Check that the post type exists and has posts
-- Verify database credentials in wp-config.php
+Yes, you can export any registered post type using the `--post_type` parameter.
 
 == Changelog ==
 
-== 1.0.0 ==
-- Initial release
-- Full Polylang support
-- Support for all post types
-- Featured image export
-- Term and taxonomy export
-- Metadata export
-
-== License ==
-
-GPL v2 or later
-
-== Author ==
-
-Jean-Philippe Bidegain
+= 1.0.0 =
+* Initial release
