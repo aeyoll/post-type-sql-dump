@@ -17,11 +17,11 @@ if (!defined('WP_CLI') || !WP_CLI) {
 class PTSD_CLI_Command {
 
     /**
-     * Database connection
+     * WordPress database object
      *
-     * @var mysqli
+     * @var wpdb
      */
-    private $mysqli;
+    private $wpdb;
 
     /**
      * SQL dump array
@@ -115,18 +115,10 @@ class PTSD_CLI_Command {
      * @throws Exception
      */
     private function initialize_database() {
-        $database = defined('DB_NAME') ? DB_NAME : '';
-        $host = defined('DB_HOST') ? DB_HOST : '';
-        $user = defined('DB_USER') ? DB_USER : '';
-        $password = defined('DB_PASSWORD') ? DB_PASSWORD : '';
+        global $wpdb;
 
-        $this->mysqli = new mysqli($host, $user, $password, $database);
-
-        if ($this->mysqli->connect_error) {
-            throw new Exception("Connection failed: " . $this->mysqli->connect_error);
-        }
-
-        $this->mysqli->set_charset("utf8mb4");
+        $this->wpdb = $wpdb;
+        $this->table_prefix = $wpdb->prefix;
 
         WP_CLI::log("Exporting content for post_type: {$this->post_type} with new IDs (Polylang support)");
     }
@@ -135,7 +127,7 @@ class PTSD_CLI_Command {
      * Add SQL dump header
      */
     private function add_header() {
-        $database = defined('DB_NAME') ? DB_NAME : '';
+        $database = DB_NAME;
 
         $this->sql_dump[] = "-- WordPress Posts Export with New IDs (Polylang Compatible)";
         $this->sql_dump[] = "-- Post Type: {$this->post_type}";
@@ -235,46 +227,40 @@ class PTSD_CLI_Command {
             ORDER BY t.slug
         ";
 
-        $language_mapping_result = $this->mysqli->query($language_mapping_query);
-
-        $language_slugs = [];
-        if ($language_mapping_result && $language_mapping_result->num_rows > 0) {
-            while ($lang_map = $language_mapping_result->fetch_assoc()) {
-                $language_slugs[] = $lang_map['slug'];
-            }
-            $language_mapping_result->free();
-        }
+        $language_slugs = $this->wpdb->get_col($language_mapping_query);
 
         if (!empty($language_slugs)) {
             $this->sql_dump[] = "-- Dynamically map language slugs to target database term_taxonomy_ids";
             foreach ($language_slugs as $slug) {
+                $slug_escaped = esc_sql($slug);
+
                 // Map 'language' taxonomy (for posts)
-                $this->sql_dump[] = "SET @existing_lang_{$slug} = (";
+                $this->sql_dump[] = "SET @existing_lang_{$slug_escaped} = (";
                 $this->sql_dump[] = "  SELECT tt.term_taxonomy_id";
                 $this->sql_dump[] = "  FROM `{$this->table_prefix}term_taxonomy` tt";
                 $this->sql_dump[] = "  INNER JOIN `{$this->table_prefix}terms` t ON tt.term_id = t.term_id";
-                $this->sql_dump[] = "  WHERE tt.taxonomy = 'language' AND t.slug = '{$slug}'";
+                $this->sql_dump[] = "  WHERE tt.taxonomy = 'language' AND t.slug = '{$slug_escaped}'";
                 $this->sql_dump[] = "  LIMIT 1";
                 $this->sql_dump[] = ");";
 
                 // Map 'term_language' taxonomy (for terms)
-                $this->sql_dump[] = "SET @existing_term_lang_{$slug} = (";
+                $this->sql_dump[] = "SET @existing_term_lang_{$slug_escaped} = (";
                 $this->sql_dump[] = "  SELECT tt.term_taxonomy_id";
                 $this->sql_dump[] = "  FROM `{$this->table_prefix}term_taxonomy` tt";
                 $this->sql_dump[] = "  INNER JOIN `{$this->table_prefix}terms` t ON tt.term_id = t.term_id";
-                $this->sql_dump[] = "  WHERE tt.taxonomy = 'term_language' AND t.slug = '{$slug}'";
+                $this->sql_dump[] = "  WHERE tt.taxonomy = 'term_language' AND t.slug = '{$slug_escaped}'";
                 $this->sql_dump[] = "  LIMIT 1";
                 $this->sql_dump[] = ");";
                 // Try with 'pll_' prefix
-                $this->sql_dump[] = "SET @existing_term_lang_{$slug} = IFNULL(@existing_term_lang_{$slug}, (";
+                $this->sql_dump[] = "SET @existing_term_lang_{$slug_escaped} = IFNULL(@existing_term_lang_{$slug_escaped}, (";
                 $this->sql_dump[] = "  SELECT tt.term_taxonomy_id";
                 $this->sql_dump[] = "  FROM `{$this->table_prefix}term_taxonomy` tt";
                 $this->sql_dump[] = "  INNER JOIN `{$this->table_prefix}terms` t ON tt.term_id = t.term_id";
-                $this->sql_dump[] = "  WHERE tt.taxonomy = 'term_language' AND t.slug = 'pll_{$slug}'";
+                $this->sql_dump[] = "  WHERE tt.taxonomy = 'term_language' AND t.slug = 'pll_{$slug_escaped}'";
                 $this->sql_dump[] = "  LIMIT 1";
                 $this->sql_dump[] = "));";
                 // Fallback to 'language' taxonomy
-                $this->sql_dump[] = "SET @existing_term_lang_{$slug} = IFNULL(@existing_term_lang_{$slug}, @existing_lang_{$slug});";
+                $this->sql_dump[] = "SET @existing_term_lang_{$slug_escaped} = IFNULL(@existing_term_lang_{$slug_escaped}, @existing_lang_{$slug_escaped});";
             }
             $this->sql_dump[] = "";
         }
@@ -289,20 +275,20 @@ class PTSD_CLI_Command {
         $this->sql_dump[] = "--";
         $this->sql_dump[] = "";
 
-        $posts_query = "
+        $posts_query = $this->wpdb->prepare("
             SELECT p.*, t.slug as post_language
             FROM {$this->table_prefix}posts p
             LEFT JOIN {$this->table_prefix}term_relationships tr ON p.ID = tr.object_id
             LEFT JOIN {$this->table_prefix}term_taxonomy tt ON tr.term_taxonomy_id = tt.term_taxonomy_id AND tt.taxonomy = 'language'
             LEFT JOIN {$this->table_prefix}terms t ON tt.term_id = t.term_id
-            WHERE p.post_type = '{$this->mysqli->real_escape_string($this->post_type)}'
+            WHERE p.post_type = %s
             ORDER BY p.ID ASC
-        ";
+        ", $this->post_type);
 
-        $posts_result = $this->mysqli->query($posts_query);
+        $posts = $this->wpdb->get_results($posts_query, ARRAY_A);
 
-        if ($posts_result && $posts_result->num_rows > 0) {
-            while ($post = $posts_result->fetch_assoc()) {
+        if ($posts) {
+            foreach ($posts as $post) {
                 $old_post_id = $post['ID'];
                 $post_language = $post['post_language'];
 
@@ -321,7 +307,7 @@ class PTSD_CLI_Command {
                     } elseif (is_numeric($value)) {
                         $values[] = $value;
                     } else {
-                        $escaped_value = $this->mysqli->real_escape_string($value);
+                        $escaped_value = esc_sql($value);
                         $values[] = "'{$escaped_value}'";
                     }
                 }
@@ -331,13 +317,13 @@ class PTSD_CLI_Command {
                 $this->sql_dump[] = "SET @post_id_{$old_post_id} = LAST_INSERT_ID();";
 
                 if ($post_language) {
-                    $this->sql_dump[] = "SET @post_{$old_post_id}_lang = '{$post_language}';";
+                    $post_language_escaped = esc_sql($post_language);
+                    $this->sql_dump[] = "SET @post_{$old_post_id}_lang = '{$post_language_escaped}';";
                 }
                 $this->sql_dump[] = "";
 
                 WP_CLI::log("Mapped post ID {$old_post_id} to new ID (language: " . ($post_language ?: 'none') . ")");
             }
-            $posts_result->free();
         }
     }
 
@@ -350,21 +336,21 @@ class PTSD_CLI_Command {
         $this->sql_dump[] = "--";
         $this->sql_dump[] = "";
 
-        $attachments_query = "
+        $attachments_query = $this->wpdb->prepare("
             SELECT DISTINCT a.*
             FROM {$this->table_prefix}posts a
             INNER JOIN {$this->table_prefix}postmeta pm ON a.ID = pm.meta_value
             INNER JOIN {$this->table_prefix}posts p ON pm.post_id = p.ID
-            WHERE p.post_type = '{$this->mysqli->real_escape_string($this->post_type)}'
+            WHERE p.post_type = %s
             AND pm.meta_key = '_thumbnail_id'
             AND a.post_type = 'attachment'
             ORDER BY a.ID ASC
-        ";
+        ", $this->post_type);
 
-        $attachments_result = $this->mysqli->query($attachments_query);
+        $attachments = $this->wpdb->get_results($attachments_query, ARRAY_A);
 
-        if ($attachments_result && $attachments_result->num_rows > 0) {
-            while ($attachment = $attachments_result->fetch_assoc()) {
+        if ($attachments) {
+            foreach ($attachments as $attachment) {
                 $old_attachment_id = $attachment['ID'];
 
                 unset($attachment['ID']);
@@ -382,7 +368,7 @@ class PTSD_CLI_Command {
                     } elseif (is_numeric($value)) {
                         $values[] = $value;
                     } else {
-                        $escaped_value = $this->mysqli->real_escape_string($value);
+                        $escaped_value = esc_sql($value);
                         $values[] = "'{$escaped_value}'";
                     }
                 }
@@ -394,7 +380,6 @@ class PTSD_CLI_Command {
 
                 WP_CLI::log("Mapped attachment ID {$old_attachment_id} to new ID");
             }
-            $attachments_result->free();
         }
     }
 
@@ -407,32 +392,29 @@ class PTSD_CLI_Command {
         $this->sql_dump[] = "--";
         $this->sql_dump[] = "";
 
-        $attachment_meta_query = "
+        $attachment_meta_query = $this->wpdb->prepare("
             SELECT pm.*, a.ID as old_attachment_id
             FROM {$this->table_prefix}postmeta pm
             INNER JOIN {$this->table_prefix}posts a ON pm.post_id = a.ID
             INNER JOIN {$this->table_prefix}postmeta pm2 ON a.ID = pm2.meta_value
             INNER JOIN {$this->table_prefix}posts p ON pm2.post_id = p.ID
-            WHERE p.post_type = '{$this->mysqli->real_escape_string($this->post_type)}'
+            WHERE p.post_type = %s
             AND pm2.meta_key = '_thumbnail_id'
             AND a.post_type = 'attachment'
             ORDER BY pm.meta_id ASC
-        ";
+        ", $this->post_type);
 
-        $attachment_meta_result = $this->mysqli->query($attachment_meta_query);
+        $attachment_meta = $this->wpdb->get_results($attachment_meta_query, ARRAY_A);
 
-        if ($attachment_meta_result && $attachment_meta_result->num_rows > 0) {
-            while ($meta = $attachment_meta_result->fetch_assoc()) {
+        if ($attachment_meta) {
+            foreach ($attachment_meta as $meta) {
                 $old_attachment_id = $meta['old_attachment_id'];
-                $meta_key = $meta['meta_key'];
-                $meta_value = $meta['meta_value'];
+                $meta_key = esc_sql($meta['meta_key']);
+                $meta_value = $meta['meta_value'] === null ? 'NULL' : "'" . esc_sql($meta['meta_value']) . "'";
 
-                $escaped_meta_key = $this->mysqli->real_escape_string($meta_key);
-                $escaped_meta_value = $meta_value === null ? 'NULL' : "'" . $this->mysqli->real_escape_string($meta_value) . "'";
-                $this->sql_dump[] = "INSERT INTO `{$this->table_prefix}postmeta` (`post_id`, `meta_key`, `meta_value`) VALUES (@attachment_id_{$old_attachment_id}, '{$escaped_meta_key}', {$escaped_meta_value});";
+                $this->sql_dump[] = "INSERT INTO `{$this->table_prefix}postmeta` (`post_id`, `meta_key`, `meta_value`) VALUES (@attachment_id_{$old_attachment_id}, '{$meta_key}', {$meta_value});";
             }
             $this->sql_dump[] = "";
-            $attachment_meta_result->free();
         }
     }
 
@@ -445,34 +427,35 @@ class PTSD_CLI_Command {
         $this->sql_dump[] = "--";
         $this->sql_dump[] = "";
 
-        $postmeta_query = "
+        $postmeta_query = $this->wpdb->prepare("
             SELECT pm.*, p.ID as old_post_id
             FROM {$this->table_prefix}postmeta pm
             INNER JOIN {$this->table_prefix}posts p ON pm.post_id = p.ID
-            WHERE p.post_type = '{$this->mysqli->real_escape_string($this->post_type)}'
+            WHERE p.post_type = %s
             ORDER BY pm.meta_id ASC
-        ";
+        ", $this->post_type);
 
-        $postmeta_result = $this->mysqli->query($postmeta_query);
+        $postmeta = $this->wpdb->get_results($postmeta_query, ARRAY_A);
 
-        if ($postmeta_result && $postmeta_result->num_rows > 0) {
-            while ($meta = $postmeta_result->fetch_assoc()) {
+        if ($postmeta) {
+            foreach ($postmeta as $meta) {
                 $old_post_id = $meta['old_post_id'];
                 $meta_key = $meta['meta_key'];
                 $meta_value = $meta['meta_value'];
 
                 if ($meta_key === '_pll_translation_of' && is_numeric($meta_value) && $meta_value > 0) {
-                    $this->sql_dump[] = "INSERT INTO `{$this->table_prefix}postmeta` (`post_id`, `meta_key`, `meta_value`) VALUES (@post_id_{$old_post_id}, '{$this->mysqli->real_escape_string($meta_key)}', @post_id_{$meta_value});";
+                    $meta_key_escaped = esc_sql($meta_key);
+                    $this->sql_dump[] = "INSERT INTO `{$this->table_prefix}postmeta` (`post_id`, `meta_key`, `meta_value`) VALUES (@post_id_{$old_post_id}, '{$meta_key_escaped}', @post_id_{$meta_value});";
                 } elseif ($meta_key === '_thumbnail_id' && is_numeric($meta_value) && $meta_value > 0) {
-                    $this->sql_dump[] = "INSERT INTO `{$this->table_prefix}postmeta` (`post_id`, `meta_key`, `meta_value`) VALUES (@post_id_{$old_post_id}, '{$this->mysqli->real_escape_string($meta_key)}', @attachment_id_{$meta_value});";
+                    $meta_key_escaped = esc_sql($meta_key);
+                    $this->sql_dump[] = "INSERT INTO `{$this->table_prefix}postmeta` (`post_id`, `meta_key`, `meta_value`) VALUES (@post_id_{$old_post_id}, '{$meta_key_escaped}', @attachment_id_{$meta_value});";
                 } else {
-                    $escaped_meta_key = $this->mysqli->real_escape_string($meta_key);
-                    $escaped_meta_value = $meta_value === null ? 'NULL' : "'" . $this->mysqli->real_escape_string($meta_value) . "'";
-                    $this->sql_dump[] = "INSERT INTO `{$this->table_prefix}postmeta` (`post_id`, `meta_key`, `meta_value`) VALUES (@post_id_{$old_post_id}, '{$escaped_meta_key}', {$escaped_meta_value});";
+                    $meta_key_escaped = esc_sql($meta_key);
+                    $meta_value_escaped = $meta_value === null ? 'NULL' : "'" . esc_sql($meta_value) . "'";
+                    $this->sql_dump[] = "INSERT INTO `{$this->table_prefix}postmeta` (`post_id`, `meta_key`, `meta_value`) VALUES (@post_id_{$old_post_id}, '{$meta_key_escaped}', {$meta_value_escaped});";
                 }
             }
             $this->sql_dump[] = "";
-            $postmeta_result->free();
         }
     }
 
@@ -485,20 +468,20 @@ class PTSD_CLI_Command {
         $this->sql_dump[] = "--";
         $this->sql_dump[] = "";
 
-        $translation_terms_query = "
+        $translation_terms_query = $this->wpdb->prepare("
             SELECT DISTINCT t.*
             FROM {$this->table_prefix}terms t
             INNER JOIN {$this->table_prefix}term_taxonomy tt ON t.term_id = tt.term_id
             INNER JOIN {$this->table_prefix}term_relationships tr ON tt.term_taxonomy_id = tr.term_taxonomy_id
             INNER JOIN {$this->table_prefix}posts p ON tr.object_id = p.ID
             WHERE tt.taxonomy = 'post_translations'
-            AND p.post_type = '{$this->mysqli->real_escape_string($this->post_type)}'
-        ";
+            AND p.post_type = %s
+        ", $this->post_type);
 
-        $translation_terms_result = $this->mysqli->query($translation_terms_query);
+        $translation_terms = $this->wpdb->get_results($translation_terms_query, ARRAY_A);
 
-        if ($translation_terms_result && $translation_terms_result->num_rows > 0) {
-            while ($term = $translation_terms_result->fetch_assoc()) {
+        if ($translation_terms) {
+            foreach ($translation_terms as $term) {
                 $old_term_id = $term['term_id'];
 
                 unset($term['term_id']);
@@ -517,7 +500,7 @@ class PTSD_CLI_Command {
                     } elseif (is_numeric($value)) {
                         $values[] = $value;
                     } else {
-                        $escaped_value = $this->mysqli->real_escape_string($value);
+                        $escaped_value = esc_sql($value);
                         $values[] = "'{$escaped_value}'";
                     }
                 }
@@ -527,7 +510,6 @@ class PTSD_CLI_Command {
                 $this->sql_dump[] = "SET @trans_term_id_{$old_term_id} = LAST_INSERT_ID();";
                 $this->sql_dump[] = "";
             }
-            $translation_terms_result->free();
         }
     }
 
@@ -540,19 +522,19 @@ class PTSD_CLI_Command {
         $this->sql_dump[] = "--";
         $this->sql_dump[] = "";
 
-        $translation_taxonomy_query = "
+        $translation_taxonomy_query = $this->wpdb->prepare("
             SELECT DISTINCT tt.*
             FROM {$this->table_prefix}term_taxonomy tt
             INNER JOIN {$this->table_prefix}term_relationships tr ON tt.term_taxonomy_id = tr.term_taxonomy_id
             INNER JOIN {$this->table_prefix}posts p ON tr.object_id = p.ID
             WHERE tt.taxonomy = 'post_translations'
-            AND p.post_type = '{$this->mysqli->real_escape_string($this->post_type)}'
-        ";
+            AND p.post_type = %s
+        ", $this->post_type);
 
-        $translation_taxonomy_result = $this->mysqli->query($translation_taxonomy_query);
+        $translation_taxonomy = $this->wpdb->get_results($translation_taxonomy_query, ARRAY_A);
 
-        if ($translation_taxonomy_result && $translation_taxonomy_result->num_rows > 0) {
-            while ($tt = $translation_taxonomy_result->fetch_assoc()) {
+        if ($translation_taxonomy) {
+            foreach ($translation_taxonomy as $tt) {
                 $old_term_taxonomy_id = $tt['term_taxonomy_id'];
                 $old_term_id = $tt['term_id'];
                 $tt_description = $tt['description'];
@@ -580,7 +562,7 @@ class PTSD_CLI_Command {
                     } elseif (is_numeric($value)) {
                         $values[] = $value;
                     } else {
-                        $escaped_value = $this->mysqli->real_escape_string($value);
+                        $escaped_value = esc_sql($value);
                         $values[] = "'{$escaped_value}'";
                     }
                 }
@@ -590,7 +572,6 @@ class PTSD_CLI_Command {
                 $this->sql_dump[] = "SET @trans_term_taxonomy_id_{$old_term_taxonomy_id} = LAST_INSERT_ID();";
                 $this->sql_dump[] = "";
             }
-            $translation_taxonomy_result->free();
         }
     }
 
@@ -604,28 +585,23 @@ class PTSD_CLI_Command {
         $this->sql_dump[] = "";
 
         // Get all taxonomies used by this post type
-        $taxonomies_query = "
+        $taxonomies_query = $this->wpdb->prepare("
             SELECT DISTINCT tt.taxonomy
             FROM {$this->table_prefix}term_taxonomy tt
             INNER JOIN {$this->table_prefix}term_relationships tr ON tt.term_taxonomy_id = tr.term_taxonomy_id
             INNER JOIN {$this->table_prefix}posts p ON tr.object_id = p.ID
-            WHERE p.post_type = '{$this->mysqli->real_escape_string($this->post_type)}'
+            WHERE p.post_type = %s
             AND tt.taxonomy NOT IN ('language', 'post_translations', 'term_language', 'term_translations')
-        ";
+        ", $this->post_type);
 
-        $taxonomies_result = $this->mysqli->query($taxonomies_query);
-        $taxonomies = [];
-
-        if ($taxonomies_result && $taxonomies_result->num_rows > 0) {
-            while ($tax = $taxonomies_result->fetch_assoc()) {
-                $taxonomies[] = "'" . $this->mysqli->real_escape_string($tax['taxonomy']) . "'";
-            }
-            $taxonomies_result->free();
-            WP_CLI::log("Found taxonomies: " . implode(', ', $taxonomies));
-        }
+        $taxonomies = $this->wpdb->get_col($taxonomies_query);
 
         if (!empty($taxonomies)) {
-            $taxonomies_list = implode(', ', $taxonomies);
+            WP_CLI::log("Found taxonomies: " . implode(', ', $taxonomies));
+
+            $taxonomies_escaped = array_map('esc_sql', $taxonomies);
+            $taxonomies_list = "'" . implode("', '", $taxonomies_escaped) . "'";
+
             $terms_query = "
                 SELECT DISTINCT t.*, lang_t.slug as term_language
                 FROM {$this->table_prefix}terms t
@@ -637,10 +613,10 @@ class PTSD_CLI_Command {
                 ORDER BY t.term_id ASC
             ";
 
-            $terms_result = $this->mysqli->query($terms_query);
+            $terms = $this->wpdb->get_results($terms_query, ARRAY_A);
 
-            if ($terms_result && $terms_result->num_rows > 0) {
-                while ($term = $terms_result->fetch_assoc()) {
+            if ($terms) {
+                foreach ($terms as $term) {
                     $old_term_id = $term['term_id'];
                     $term_language = $term['term_language'];
 
@@ -659,7 +635,7 @@ class PTSD_CLI_Command {
                         } elseif (is_numeric($value)) {
                             $values[] = $value;
                         } else {
-                            $escaped_value = $this->mysqli->real_escape_string($value);
+                            $escaped_value = esc_sql($value);
                             $values[] = "'{$escaped_value}'";
                         }
                     }
@@ -669,11 +645,11 @@ class PTSD_CLI_Command {
                     $this->sql_dump[] = "SET @term_id_{$old_term_id} = LAST_INSERT_ID();";
 
                     if ($term_language) {
-                        $this->sql_dump[] = "SET @term_{$old_term_id}_lang = '{$term_language}';";
+                        $term_language_escaped = esc_sql($term_language);
+                        $this->sql_dump[] = "SET @term_{$old_term_id}_lang = '{$term_language_escaped}';";
                     }
                     $this->sql_dump[] = "";
                 }
-                $terms_result->free();
             }
         }
     }
@@ -687,7 +663,7 @@ class PTSD_CLI_Command {
         $this->sql_dump[] = "--";
         $this->sql_dump[] = "";
 
-        $term_translation_terms_query = "
+        $term_translation_terms_query = $this->wpdb->prepare("
             SELECT DISTINCT t.*
             FROM {$this->table_prefix}terms t
             INNER JOIN {$this->table_prefix}term_taxonomy tt ON t.term_id = tt.term_id
@@ -697,14 +673,14 @@ class PTSD_CLI_Command {
             INNER JOIN {$this->table_prefix}term_relationships tr2 ON tt2.term_taxonomy_id = tr2.term_taxonomy_id
             INNER JOIN {$this->table_prefix}posts p ON tr2.object_id = p.ID
             WHERE tt.taxonomy = 'term_translations'
-            AND p.post_type = '{$this->mysqli->real_escape_string($this->post_type)}'
+            AND p.post_type = %s
             AND tt2.taxonomy NOT IN ('language', 'post_translations', 'term_language', 'term_translations')
-        ";
+        ", $this->post_type);
 
-        $term_translation_terms_result = $this->mysqli->query($term_translation_terms_query);
+        $term_translation_terms = $this->wpdb->get_results($term_translation_terms_query, ARRAY_A);
 
-        if ($term_translation_terms_result && $term_translation_terms_result->num_rows > 0) {
-            while ($term = $term_translation_terms_result->fetch_assoc()) {
+        if ($term_translation_terms) {
+            foreach ($term_translation_terms as $term) {
                 $old_term_id = $term['term_id'];
 
                 unset($term['term_id']);
@@ -723,7 +699,7 @@ class PTSD_CLI_Command {
                     } elseif (is_numeric($value)) {
                         $values[] = $value;
                     } else {
-                        $escaped_value = $this->mysqli->real_escape_string($value);
+                        $escaped_value = esc_sql($value);
                         $values[] = "'{$escaped_value}'";
                     }
                 }
@@ -733,7 +709,6 @@ class PTSD_CLI_Command {
                 $this->sql_dump[] = "SET @term_trans_term_id_{$old_term_id} = LAST_INSERT_ID();";
                 $this->sql_dump[] = "";
             }
-            $term_translation_terms_result->free();
         }
     }
 
@@ -746,7 +721,7 @@ class PTSD_CLI_Command {
         $this->sql_dump[] = "--";
         $this->sql_dump[] = "";
 
-        $term_translation_taxonomy_query = "
+        $term_translation_taxonomy_query = $this->wpdb->prepare("
             SELECT DISTINCT tt.*
             FROM {$this->table_prefix}term_taxonomy tt
             INNER JOIN {$this->table_prefix}term_relationships tr ON tt.term_taxonomy_id = tr.term_taxonomy_id
@@ -755,14 +730,14 @@ class PTSD_CLI_Command {
             INNER JOIN {$this->table_prefix}term_relationships tr2 ON tt2.term_taxonomy_id = tr2.term_taxonomy_id
             INNER JOIN {$this->table_prefix}posts p ON tr2.object_id = p.ID
             WHERE tt.taxonomy = 'term_translations'
-            AND p.post_type = '{$this->mysqli->real_escape_string($this->post_type)}'
+            AND p.post_type = %s
             AND tt2.taxonomy NOT IN ('language', 'post_translations', 'term_language', 'term_translations')
-        ";
+        ", $this->post_type);
 
-        $term_translation_taxonomy_result = $this->mysqli->query($term_translation_taxonomy_query);
+        $term_translation_taxonomy = $this->wpdb->get_results($term_translation_taxonomy_query, ARRAY_A);
 
-        if ($term_translation_taxonomy_result && $term_translation_taxonomy_result->num_rows > 0) {
-            while ($tt = $term_translation_taxonomy_result->fetch_assoc()) {
+        if ($term_translation_taxonomy) {
+            foreach ($term_translation_taxonomy as $tt) {
                 $old_term_taxonomy_id = $tt['term_taxonomy_id'];
                 $old_term_id = $tt['term_id'];
                 $tt_description = $tt['description'];
@@ -790,7 +765,7 @@ class PTSD_CLI_Command {
                     } elseif (is_numeric($value)) {
                         $values[] = $value;
                     } else {
-                        $escaped_value = $this->mysqli->real_escape_string($value);
+                        $escaped_value = esc_sql($value);
                         $values[] = "'{$escaped_value}'";
                     }
                 }
@@ -800,7 +775,6 @@ class PTSD_CLI_Command {
                 $this->sql_dump[] = "SET @term_trans_term_taxonomy_id_{$old_term_taxonomy_id} = LAST_INSERT_ID();";
                 $this->sql_dump[] = "";
             }
-            $term_translation_taxonomy_result->free();
         }
     }
 
@@ -814,27 +788,21 @@ class PTSD_CLI_Command {
         $this->sql_dump[] = "";
 
         // Get taxonomies list
-        $taxonomies_query = "
+        $taxonomies_query = $this->wpdb->prepare("
             SELECT DISTINCT tt.taxonomy
             FROM {$this->table_prefix}term_taxonomy tt
             INNER JOIN {$this->table_prefix}term_relationships tr ON tt.term_taxonomy_id = tr.term_taxonomy_id
             INNER JOIN {$this->table_prefix}posts p ON tr.object_id = p.ID
-            WHERE p.post_type = '{$this->mysqli->real_escape_string($this->post_type)}'
+            WHERE p.post_type = %s
             AND tt.taxonomy NOT IN ('language', 'post_translations', 'term_language', 'term_translations')
-        ";
+        ", $this->post_type);
 
-        $taxonomies_result = $this->mysqli->query($taxonomies_query);
-        $taxonomies = [];
-
-        if ($taxonomies_result && $taxonomies_result->num_rows > 0) {
-            while ($tax = $taxonomies_result->fetch_assoc()) {
-                $taxonomies[] = "'" . $this->mysqli->real_escape_string($tax['taxonomy']) . "'";
-            }
-            $taxonomies_result->free();
-        }
+        $taxonomies = $this->wpdb->get_col($taxonomies_query);
 
         if (!empty($taxonomies)) {
-            $taxonomies_list = implode(', ', $taxonomies);
+            $taxonomies_escaped = array_map('esc_sql', $taxonomies);
+            $taxonomies_list = "'" . implode("', '", $taxonomies_escaped) . "'";
+
             $term_taxonomy_query = "
                 SELECT DISTINCT tt.*
                 FROM {$this->table_prefix}term_taxonomy tt
@@ -842,11 +810,11 @@ class PTSD_CLI_Command {
                 ORDER BY tt.term_taxonomy_id ASC
             ";
 
-            $term_taxonomy_result = $this->mysqli->query($term_taxonomy_query);
+            $term_taxonomy = $this->wpdb->get_results($term_taxonomy_query, ARRAY_A);
 
-            if ($term_taxonomy_result && $term_taxonomy_result->num_rows > 0) {
-                WP_CLI::log("Exporting " . $term_taxonomy_result->num_rows . " term_taxonomy entries");
-                while ($tt = $term_taxonomy_result->fetch_assoc()) {
+            if ($term_taxonomy) {
+                WP_CLI::log("Exporting " . count($term_taxonomy) . " term_taxonomy entries");
+                foreach ($term_taxonomy as $tt) {
                     $old_term_taxonomy_id = $tt['term_taxonomy_id'];
                     $old_term_id = $tt['term_id'];
                     $taxonomy = $tt['taxonomy'];
@@ -869,7 +837,7 @@ class PTSD_CLI_Command {
                         } elseif (is_numeric($value)) {
                             $values[] = $value;
                         } else {
-                            $escaped_value = $this->mysqli->real_escape_string($value);
+                            $escaped_value = esc_sql($value);
                             $values[] = "'{$escaped_value}'";
                         }
                     }
@@ -880,7 +848,6 @@ class PTSD_CLI_Command {
                     $this->sql_dump[] = "SET @term_taxonomy_id_{$old_term_taxonomy_id} = IF(@term_id_{$old_term_id} IS NOT NULL, LAST_INSERT_ID(), NULL);";
                     $this->sql_dump[] = "";
                 }
-                $term_taxonomy_result->free();
             }
         }
     }
@@ -895,27 +862,21 @@ class PTSD_CLI_Command {
         $this->sql_dump[] = "";
 
         // Get taxonomies list
-        $taxonomies_query = "
+        $taxonomies_query = $this->wpdb->prepare("
             SELECT DISTINCT tt.taxonomy
             FROM {$this->table_prefix}term_taxonomy tt
             INNER JOIN {$this->table_prefix}term_relationships tr ON tt.term_taxonomy_id = tr.term_taxonomy_id
             INNER JOIN {$this->table_prefix}posts p ON tr.object_id = p.ID
-            WHERE p.post_type = '{$this->mysqli->real_escape_string($this->post_type)}'
+            WHERE p.post_type = %s
             AND tt.taxonomy NOT IN ('language', 'post_translations', 'term_language', 'term_translations')
-        ";
+        ", $this->post_type);
 
-        $taxonomies_result = $this->mysqli->query($taxonomies_query);
-        $taxonomies = [];
-
-        if ($taxonomies_result && $taxonomies_result->num_rows > 0) {
-            while ($tax = $taxonomies_result->fetch_assoc()) {
-                $taxonomies[] = "'" . $this->mysqli->real_escape_string($tax['taxonomy']) . "'";
-            }
-            $taxonomies_result->free();
-        }
+        $taxonomies = $this->wpdb->get_col($taxonomies_query);
 
         if (!empty($taxonomies)) {
-            $taxonomies_list = implode(', ', $taxonomies);
+            $taxonomies_escaped = array_map('esc_sql', $taxonomies);
+            $taxonomies_list = "'" . implode("', '", $taxonomies_escaped) . "'";
+
             $termmeta_query = "
                 SELECT tm.*, t.term_id as old_term_id
                 FROM {$this->table_prefix}termmeta tm
@@ -925,20 +886,17 @@ class PTSD_CLI_Command {
                 ORDER BY tm.meta_id ASC
             ";
 
-            $termmeta_result = $this->mysqli->query($termmeta_query);
+            $termmeta = $this->wpdb->get_results($termmeta_query, ARRAY_A);
 
-            if ($termmeta_result && $termmeta_result->num_rows > 0) {
-                while ($meta = $termmeta_result->fetch_assoc()) {
+            if ($termmeta) {
+                foreach ($termmeta as $meta) {
                     $old_term_id = $meta['old_term_id'];
-                    $meta_key = $meta['meta_key'];
-                    $meta_value = $meta['meta_value'];
+                    $meta_key = esc_sql($meta['meta_key']);
+                    $meta_value = $meta['meta_value'] === null ? 'NULL' : "'" . esc_sql($meta['meta_value']) . "'";
 
-                    $escaped_meta_key = $this->mysqli->real_escape_string($meta_key);
-                    $escaped_meta_value = $meta_value === null ? 'NULL' : "'" . $this->mysqli->real_escape_string($meta_value) . "'";
-                    $this->sql_dump[] = "INSERT INTO `{$this->table_prefix}termmeta` (`term_id`, `meta_key`, `meta_value`) VALUES (@term_id_{$old_term_id}, '{$escaped_meta_key}', {$escaped_meta_value});";
+                    $this->sql_dump[] = "INSERT INTO `{$this->table_prefix}termmeta` (`term_id`, `meta_key`, `meta_value`) VALUES (@term_id_{$old_term_id}, '{$meta_key}', {$meta_value});";
                 }
                 $this->sql_dump[] = "";
-                $termmeta_result->free();
             }
         }
     }
@@ -953,27 +911,21 @@ class PTSD_CLI_Command {
         $this->sql_dump[] = "";
 
         // Get taxonomies list
-        $taxonomies_query = "
+        $taxonomies_query = $this->wpdb->prepare("
             SELECT DISTINCT tt.taxonomy
             FROM {$this->table_prefix}term_taxonomy tt
             INNER JOIN {$this->table_prefix}term_relationships tr ON tt.term_taxonomy_id = tr.term_taxonomy_id
             INNER JOIN {$this->table_prefix}posts p ON tr.object_id = p.ID
-            WHERE p.post_type = '{$this->mysqli->real_escape_string($this->post_type)}'
+            WHERE p.post_type = %s
             AND tt.taxonomy NOT IN ('language', 'post_translations', 'term_language', 'term_translations')
-        ";
+        ", $this->post_type);
 
-        $taxonomies_result = $this->mysqli->query($taxonomies_query);
-        $taxonomies = [];
-
-        if ($taxonomies_result && $taxonomies_result->num_rows > 0) {
-            while ($tax = $taxonomies_result->fetch_assoc()) {
-                $taxonomies[] = "'" . $this->mysqli->real_escape_string($tax['taxonomy']) . "'";
-            }
-            $taxonomies_result->free();
-        }
+        $taxonomies = $this->wpdb->get_col($taxonomies_query);
 
         if (!empty($taxonomies)) {
-            $taxonomies_list = implode(', ', $taxonomies);
+            $taxonomies_escaped = array_map('esc_sql', $taxonomies);
+            $taxonomies_list = "'" . implode("', '", $taxonomies_escaped) . "'";
+
             $term_languages_query = "
                 SELECT DISTINCT
                     trans_tr.object_id as old_term_id,
@@ -992,17 +944,13 @@ class PTSD_CLI_Command {
 
             WP_CLI::log("Term language query: " . $term_languages_query);
 
-            $term_languages_result = $this->mysqli->query($term_languages_query);
-
-            if (!$term_languages_result) {
-                WP_CLI::error("Term language query failed: " . $this->mysqli->error);
-            }
+            $term_languages = $this->wpdb->get_results($term_languages_query, ARRAY_A);
 
             $term_language_map = [];
 
-            if ($term_languages_result && $term_languages_result->num_rows > 0) {
-                WP_CLI::log("Processing " . $term_languages_result->num_rows . " term translation groups");
-                while ($tl = $term_languages_result->fetch_assoc()) {
+            if ($term_languages) {
+                WP_CLI::log("Processing " . count($term_languages) . " term translation groups");
+                foreach ($term_languages as $tl) {
                     $old_term_id = $tl['old_term_id'];
                     $description = $tl['description'];
 
@@ -1020,7 +968,6 @@ class PTSD_CLI_Command {
                         WP_CLI::warning("Failed to unserialize translation data for term {$old_term_id}: {$description}");
                     }
                 }
-                $term_languages_result->free();
             } else {
                 WP_CLI::warning("No term translation groups found in query");
             }
@@ -1029,8 +976,9 @@ class PTSD_CLI_Command {
                 WP_CLI::log("Found " . count($term_language_map) . " term language assignments from translation groups");
                 $this->sql_dump[] = "-- Found " . count($term_language_map) . " term language assignments";
                 foreach ($term_language_map as $old_term_id => $language_slug) {
-                    $this->sql_dump[] = "-- Assign term {$old_term_id} to language {$language_slug}";
-                    $this->sql_dump[] = "INSERT INTO `{$this->table_prefix}term_relationships` (`object_id`, `term_taxonomy_id`, `term_order`) SELECT @term_id_{$old_term_id}, @existing_term_lang_{$language_slug}, 0 WHERE @existing_term_lang_{$language_slug} IS NOT NULL AND @term_id_{$old_term_id} IS NOT NULL;";
+                    $language_slug_escaped = esc_sql($language_slug);
+                    $this->sql_dump[] = "-- Assign term {$old_term_id} to language {$language_slug_escaped}";
+                    $this->sql_dump[] = "INSERT INTO `{$this->table_prefix}term_relationships` (`object_id`, `term_taxonomy_id`, `term_order`) SELECT @term_id_{$old_term_id}, @existing_term_lang_{$language_slug_escaped}, 0 WHERE @existing_term_lang_{$language_slug_escaped} IS NOT NULL AND @term_id_{$old_term_id} IS NOT NULL;";
                 }
                 $this->sql_dump[] = "";
             } else {
@@ -1049,28 +997,27 @@ class PTSD_CLI_Command {
         $this->sql_dump[] = "--";
         $this->sql_dump[] = "";
 
-        $post_languages_query = "
+        $post_languages_query = $this->wpdb->prepare("
             SELECT DISTINCT p.ID as old_post_id, t.slug as language_slug
             FROM {$this->table_prefix}posts p
             INNER JOIN {$this->table_prefix}term_relationships tr ON p.ID = tr.object_id
             INNER JOIN {$this->table_prefix}term_taxonomy tt ON tr.term_taxonomy_id = tt.term_taxonomy_id
             INNER JOIN {$this->table_prefix}terms t ON tt.term_id = t.term_id
-            WHERE p.post_type = '{$this->mysqli->real_escape_string($this->post_type)}'
+            WHERE p.post_type = %s
             AND tt.taxonomy = 'language'
-        ";
+        ", $this->post_type);
 
-        $post_languages_result = $this->mysqli->query($post_languages_query);
+        $post_languages = $this->wpdb->get_results($post_languages_query, ARRAY_A);
 
-        if ($post_languages_result && $post_languages_result->num_rows > 0) {
-            while ($pl = $post_languages_result->fetch_assoc()) {
+        if ($post_languages) {
+            foreach ($post_languages as $pl) {
                 $old_post_id = $pl['old_post_id'];
-                $language_slug = $pl['language_slug'];
+                $language_slug = esc_sql($pl['language_slug']);
 
                 $this->sql_dump[] = "-- Assign post {$old_post_id} to language {$language_slug}";
                 $this->sql_dump[] = "INSERT INTO `{$this->table_prefix}term_relationships` (`object_id`, `term_taxonomy_id`, `term_order`) SELECT @post_id_{$old_post_id}, @existing_lang_{$language_slug}, 0 WHERE @existing_lang_{$language_slug} IS NOT NULL;";
             }
             $this->sql_dump[] = "";
-            $post_languages_result->free();
         }
     }
 
@@ -1083,20 +1030,20 @@ class PTSD_CLI_Command {
         $this->sql_dump[] = "--";
         $this->sql_dump[] = "";
 
-        $term_relationships_query = "
+        $term_relationships_query = $this->wpdb->prepare("
             SELECT tr.object_id, tr.term_taxonomy_id, tt.taxonomy, p.ID as old_post_id
             FROM {$this->table_prefix}term_relationships tr
             INNER JOIN {$this->table_prefix}posts p ON tr.object_id = p.ID
             INNER JOIN {$this->table_prefix}term_taxonomy tt ON tr.term_taxonomy_id = tt.term_taxonomy_id
-            WHERE p.post_type = '{$this->mysqli->real_escape_string($this->post_type)}'
+            WHERE p.post_type = %s
             AND tt.taxonomy NOT IN ('language')
             ORDER BY tt.taxonomy, tr.object_id
-        ";
+        ", $this->post_type);
 
-        $term_relationships_result = $this->mysqli->query($term_relationships_query);
+        $term_relationships = $this->wpdb->get_results($term_relationships_query, ARRAY_A);
 
-        if ($term_relationships_result && $term_relationships_result->num_rows > 0) {
-            while ($tr = $term_relationships_result->fetch_assoc()) {
+        if ($term_relationships) {
+            foreach ($term_relationships as $tr) {
                 $old_post_id = $tr['old_post_id'];
                 $old_term_taxonomy_id = $tr['term_taxonomy_id'];
                 $taxonomy = $tr['taxonomy'];
@@ -1108,7 +1055,6 @@ class PTSD_CLI_Command {
                 }
             }
             $this->sql_dump[] = "";
-            $term_relationships_result->free();
         }
     }
 
@@ -1121,7 +1067,7 @@ class PTSD_CLI_Command {
         $this->sql_dump[] = "--";
         $this->sql_dump[] = "";
 
-        $term_trans_relationships_query = "
+        $term_trans_relationships_query = $this->wpdb->prepare("
             SELECT DISTINCT tr.object_id as old_term_id, tr.term_taxonomy_id as old_term_taxonomy_id
             FROM {$this->table_prefix}term_relationships tr
             INNER JOIN {$this->table_prefix}term_taxonomy tt ON tr.term_taxonomy_id = tt.term_taxonomy_id
@@ -1130,21 +1076,20 @@ class PTSD_CLI_Command {
             INNER JOIN {$this->table_prefix}term_relationships tr2 ON tt2.term_taxonomy_id = tr2.term_taxonomy_id
             INNER JOIN {$this->table_prefix}posts p ON tr2.object_id = p.ID
             WHERE tt.taxonomy = 'term_translations'
-            AND p.post_type = '{$this->mysqli->real_escape_string($this->post_type)}'
+            AND p.post_type = %s
             AND tt2.taxonomy NOT IN ('language', 'post_translations', 'term_language', 'term_translations')
-        ";
+        ", $this->post_type);
 
-        $term_trans_relationships_result = $this->mysqli->query($term_trans_relationships_query);
+        $term_trans_relationships = $this->wpdb->get_results($term_trans_relationships_query, ARRAY_A);
 
-        if ($term_trans_relationships_result && $term_trans_relationships_result->num_rows > 0) {
-            while ($ttr = $term_trans_relationships_result->fetch_assoc()) {
+        if ($term_trans_relationships) {
+            foreach ($term_trans_relationships as $ttr) {
                 $old_term_id = $ttr['old_term_id'];
                 $old_term_taxonomy_id = $ttr['old_term_taxonomy_id'];
 
                 $this->sql_dump[] = "INSERT INTO `{$this->table_prefix}term_relationships` (`object_id`, `term_taxonomy_id`, `term_order`) SELECT @term_id_{$old_term_id}, @term_trans_term_taxonomy_id_{$old_term_taxonomy_id}, 0 WHERE @term_trans_term_taxonomy_id_{$old_term_taxonomy_id} IS NOT NULL AND @term_id_{$old_term_id} IS NOT NULL;";
             }
             $this->sql_dump[] = "";
-            $term_trans_relationships_result->free();
         }
     }
 
@@ -1163,8 +1108,9 @@ class PTSD_CLI_Command {
 
                 $description_parts = [];
                 foreach ($translation_data as $lang => $old_post_id) {
+                    $lang_escaped = esc_sql($lang);
                     $lang_len = strlen($lang);
-                    $description_parts[] = "CONCAT('s:{$lang_len}:\"{$this->mysqli->real_escape_string($lang)}\";i:', @post_id_{$old_post_id}, ';')";
+                    $description_parts[] = "CONCAT('s:{$lang_len}:\"{$lang_escaped}\";i:', @post_id_{$old_post_id}, ';')";
                 }
 
                 $count = count($translation_data);
@@ -1191,8 +1137,9 @@ class PTSD_CLI_Command {
 
                 $description_parts = [];
                 foreach ($translation_data as $lang => $old_term_id_in_group) {
+                    $lang_escaped = esc_sql($lang);
                     $lang_len = strlen($lang);
-                    $description_parts[] = "CONCAT('s:{$lang_len}:\"{$this->mysqli->real_escape_string($lang)}\";i:', @term_id_{$old_term_id_in_group}, ';')";
+                    $description_parts[] = "CONCAT('s:{$lang_len}:\"{$lang_escaped}\";i:', @term_id_{$old_term_id_in_group}, ';')";
                 }
 
                 $count = count($translation_data);
@@ -1218,10 +1165,5 @@ class PTSD_CLI_Command {
     private function output_sql_dump() {
         $final_sql_dump = implode("\n", $this->sql_dump);
         echo $final_sql_dump;
-
-        // Close connection
-        if ($this->mysqli) {
-            $this->mysqli->close();
-        }
     }
 }
