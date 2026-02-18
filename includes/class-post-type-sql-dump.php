@@ -10,8 +10,8 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-class Post_Type_SQL_Dump {
-
+class Post_Type_SQL_Dump
+{
     /**
      * Plugin version
      *
@@ -20,18 +20,20 @@ class Post_Type_SQL_Dump {
     const VERSION = '1.0.0';
 
     /**
-     * Constructor
+     * Constructor — boots the admin interface.
      */
-    public function __construct() {
-        // Plugin initialization code here if needed
+    public function __construct()
+    {
+        new PTSD_Admin();
     }
 
     /**
-     * Get plugin version
+     * Get plugin version.
      *
      * @return string
      */
-    public function get_version() {
+    public function get_version(): string
+    {
         return self::VERSION;
     }
 }
