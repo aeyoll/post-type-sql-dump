@@ -38,12 +38,12 @@ if (!defined('ABSPATH')) {
                     </th>
                     <td>
                         <select name="ptsd_post_type" id="ptsd_post_type">
-                            <?php foreach ($post_types as $pt) : ?>
+                            <?php foreach ($post_types as $ptsd_post_type_object) : ?>
                                 <option
-                                    value="<?php echo esc_attr($pt->name); ?>"
-                                    <?php selected($selected_post_type, $pt->name); ?>
+                                    value="<?php echo esc_attr($ptsd_post_type_object->name); ?>"
+                                    <?php selected($selected_post_type, $ptsd_post_type_object->name); ?>
                                 >
-                                    <?php echo esc_html($pt->labels->singular_name . ' (' . $pt->name . ')'); ?>
+                                    <?php echo esc_html($ptsd_post_type_object->labels->singular_name . ' (' . $ptsd_post_type_object->name . ')'); ?>
                                 </option>
                             <?php endforeach; ?>
                         </select>
