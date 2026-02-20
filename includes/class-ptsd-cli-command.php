@@ -46,7 +46,7 @@ class PTSD_CLI_Command
                 WP_CLI::log($message);
             }
 
-            // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- CLI output of SQL dump
+            // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped,WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- Direct STDOUT write required for CLI piping (e.g., wp ptsd dump > file.sql)
             fwrite(STDOUT, $sql);
 
             WP_CLI::success("SQL dump generated successfully for post_type: {$post_type} with new IDs (Polylang compatible)");
