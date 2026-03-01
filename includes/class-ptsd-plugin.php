@@ -10,7 +10,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-class Post_Type_SQL_Dump
+class PTSD_Plugin
 {
     /**
      * Plugin version
