@@ -9,11 +9,11 @@ Stable tag: 1.0.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-Export WordPress posts and their associated data to SQL format via WP-CLI command.
+Export WordPress posts and their associated data to SQL format via the admin interface (Tools > SQL Dump) or WP-CLI command.
 
 == Description ==
 
-Post Type SQL Dump provides a powerful WP-CLI command to export posts of any type along with all associated data for migration between WordPress installations.
+Post Type SQL Dump allows you to export posts of any type along with all associated data for migration between WordPress installations. You can use it directly from the WordPress admin area or via WP-CLI.
 
 **What Gets Exported:**
 
@@ -32,17 +32,28 @@ Post Type SQL Dump provides a powerful WP-CLI command to export posts of any typ
 * Full Polylang multilingual support
 * Clean imports with automatic cleanup of existing data
 
-**Requires WP-CLI** - This plugin only works via command line using WP-CLI.
-
 == Installation ==
 
 1. Upload the plugin files to `/wp-content/plugins/post-type-sql-dump/`
 2. Activate the plugin through the 'Plugins' menu in WordPress
-3. Use WP-CLI commands to export data
+3. Generate SQL dumps from the admin area (Tools > SQL Dump) or via WP-CLI
 
 == Usage ==
 
-Basic export command:
+=== Admin Interface ===
+
+1. Go to **Tools > SQL Dump** in the WordPress admin
+2. Select the post type you want to export
+3. Click **Generate SQL Dump**
+4. Review the generated SQL or click **Download as .sql file**
+
+Import the downloaded file on another WordPress installation:
+
+`wp db import export.sql`
+
+=== WP-CLI ===
+
+Basic export command (requires WP-CLI):
 
 `wp ptsd dump --post_type=page --quiet > export.sql`
 
@@ -50,7 +61,7 @@ Import on another WordPress installation:
 
 `wp db import export.sql`
 
-**Available Options:**
+**Available WP-CLI Options:**
 
 * `--post_type` - Specify which post type to export (default: post)
 * `--quiet` - Suppress progress output
@@ -59,7 +70,7 @@ Import on another WordPress installation:
 
 = Does this work without WP-CLI? =
 
-No, this plugin requires WP-CLI to be installed and only works via command line.
+Yes. The plugin provides an admin interface under **Tools > SQL Dump** that works without WP-CLI. WP-CLI is only required if you want to use the command-line export option.
 
 = Will it work with Polylang? =
 
